@@ -1,6 +1,6 @@
 import pygame as _sdl
 
-from . import assets, component, entity, geometry, layer, scene, system
+from . import assets, component, entity, geometry, layer, scene, system, smoothing
 
 from .assets import Image
 from .geometry import RectGeometry

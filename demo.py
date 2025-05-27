@@ -1,11 +1,11 @@
-import source
+import infinova
 import pygame
 
-source.init(800, 600, "Infinova Demo", "3.14", "Demo!")
+infinova.init(800, 600, "Infinova Demo", "3.14", "Demo!")
 
-game = source.GetGame()
+game = infinova.GetGame()
 
-class DemoScene(source.Scene):
+class DemoScene(infinova.Scene):
     def __init__(self):
         super().__init__("Demo")
 
@@ -13,12 +13,12 @@ class DemoScene(source.Scene):
 
         game.assets.CreateImage("GameObject image", 100, 100, surface=pygame.Surface((100, 100)))
 
-        self.player = source.GameObject( # Creating a Game object with 100x100 rect and previously created image
-            source.RectGeometry(10, 10, 100, 100),
+        self.player = infinova.GameObject( # Creating a Game object with 100x100 rect and previously created image
+            infinova.RectGeometry(10, 10, 100, 100),
             "GameObject image"
         )
 
-        self.objectsLayer = source.layer.ObjectsLayer("Objects")
+        self.objectsLayer = infinova.layer.ObjectsLayer("Objects")
         self.objectsLayer.AddObject(self.player)
 
         self.AddLayer(self.objectsLayer)
@@ -42,4 +42,4 @@ class DemoScene(source.Scene):
 game.AddScene(DemoScene()) # Loading our Demo scene to game
 game.SetSceneByIndex(1)
 
-source.run()
+infinova.run()

@@ -1,15 +1,10 @@
 from random import randint
 import pygame as pg
+import smoothing
 import math
 import json
 import sys
 import os
-
-smoothingImported = True
-try:
-    import smoothing
-except ImportError:
-    smoothingImported = False
 
 pillowImported = True
 try:
@@ -777,10 +772,6 @@ class Light:
         self.__intensity = pg.math.clamp(intensity, 0, 1)
         self.__color = color
 
-        if not smoothingImported:
-            ErrorHandler.Warn("ImportWarning", "Light", None, None, "You have to install \"Smoothing\". Otherwise \"intensity\" property of \"Light\" won't do anything")
-            self.__intensity = -1
-
         self._surface = pg.Surface((radius*2, radius*2)).convert_alpha()
 
         self.__updateSurface()
@@ -894,9 +885,6 @@ class ParticleTemplate:
 
 class Particle:
     def __init__(self, lifetime: float, position: pg.Vector2, template: ParticleTemplate, shape):
-        if not smoothingImported:
-            ErrorHandler.Throw("ImportError", "Particle", None, None, "You have to install \"Smoothing\" before using a \"Particle\"")
-
         self.__lifetime = lifetime
         
         self.template: ParticleTemplate = template

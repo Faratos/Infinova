@@ -1,1 +1,1 @@
-from .__infinova import Geometry, RectGeometry, collisions
+from .__infinova import Geometry, collisions

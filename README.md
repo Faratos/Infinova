@@ -60,7 +60,7 @@ infinova.run()
     - Components
     - Animation component
     - Time and Input
-- **Продвинутые системы:**
+- **Advanced:**
     - Camera
     - Particle system
     - Tilemaps and tiles

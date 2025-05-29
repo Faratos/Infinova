@@ -1,1 +1,1 @@
-from .__infinova import Image, Assets, AssetGroup, ImageGroup
+from .__infinova import Image, Assets, ImageGroup

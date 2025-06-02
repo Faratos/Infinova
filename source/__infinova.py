@@ -297,14 +297,15 @@ class Geometry:
             self._vertices = self.__createCapsuleVertices(self.__height)
 
         if self.__shapeType == SHAPE_POLYGON:
-            if len(args[2]) < 2:
-                ErrorHandler.Throw("NotEnoughPointError", "Geometry", "__init__", None, "Polygon has at least 3 points")
+            if len(args[2]) < 3:
+                ErrorHandler.Throw("NotEnoughPointsError", "Geometry", "__init__", None, "Polygons can have at least 3 points")
 
             self._vertices = [pg.Vector2(i) for i in args[2]]
-            center = pg.Vector2(
-                sum([vertex.x for vertex in self._vertices]) / len(self._vertices),
-                sum([vertex.y for vertex in self._vertices]) / len(self._vertices)
-            )
+            center = pg.Vector2()
+            for vertex in self._vertices:
+                center += vertex
+            center /= len(self._vertices)
+            
             self._vertices.sort(key=lambda vertex: math.atan2(vertex.y - center.y, vertex.x - center.x))
             for vertex in self._vertices:
                 vertex -= center
@@ -514,7 +515,7 @@ class Geometry:
         return self.__transformedAnchors[index]
     
     def RemoveAnchor(self, index: int):
-        if index > 0 and index < len(self.__anchorsUpdateRequired):
+        if index >= 0 and index < len(self.__anchors):
             self.__anchors.pop(index)
             return
         ErrorHandler.Throw("IndexOutOfRange", "Geometry", "RemoveAnchor", None, "Anchor index is out of anchors list range")
@@ -1796,10 +1797,10 @@ class GameObject(object):
                 if vertex.y < minVertex.y:
                     minVertex.y = vertex.y
             vertices = [vertex - minVertex for vertex in self.geometry._vertices]
-            center = pg.Vector2(
-                sum([vertex.x for vertex in vertices]) / len(vertices),
-                sum([vertex.y for vertex in vertices]) / len(vertices)
-            )
+            center = pg.Vector2()
+            for vertex in vertices:
+                center += vertex
+            center /= len(vertices)
             self._imageToGeometryOffset.xy = pg.Vector2(self.image.size) / 2 - center
             self._imageToGeometryOffset.rotate_rad_ip(self.geometry.angleRadians)
 

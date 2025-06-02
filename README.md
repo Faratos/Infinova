@@ -64,6 +64,5 @@ infinova.run()
 - **Advanced:**
     - Camera
     - Particle system
-    - Tilemaps and tiles
     - Light
     - Transitions between scenes

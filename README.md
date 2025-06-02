@@ -5,6 +5,7 @@ Easy to learn and to use game engine with a lot of features. Based on Python &am
 
 ### Infinova has support for:
 - Multi-layer rendering
+
 - Animation system
 - Collisions and (in the future) fully-working physics
 - Particles, effects, lightning
@@ -12,8 +13,7 @@ Easy to learn and to use game engine with a lot of features. Based on Python &am
 - Custom components
 --- 
 ### Dependencies:
-- Pygame-ce 2.5.3+
-- Pillow (to work with GIF, unnecessary)
+- Pygame-ce 2.5.4+
 ---
 ### Fast start:
 ```py
@@ -60,6 +60,7 @@ infinova.run()
     - Components
     - Animation component
     - Time and Input
+    
 - **Advanced:**
     - Camera
     - Particle system

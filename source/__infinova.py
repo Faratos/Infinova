@@ -1,22 +1,15 @@
 from random import randint
 import pygame as pg
-from . import smoothing
 from typing import overload
 import math
 import json
 import sys
 import os
 
-pillowImported = True
-try:
-    from PIL import Image as pillowImage
-except ImportError:
-    pillowImported = False
-
 """
 
-Infinova 0.1.0-beta by Faratos
-Using Pygame-ce 2.5.3 and Python 3.13.2
+Infinova by Faratos
+Using Pygame-ce and Python
 
 """
 
@@ -38,9 +31,10 @@ def quit():
 EVENT_TIMER_ACTIVE = pg.event.custom_type()
 
 
-SHAPE_BOX = 3
-SHAPE_CIRCLE = 4
-SHAPE_CAPSULE = 5
+SHAPE_BOX = 1
+SHAPE_CIRCLE = 2
+SHAPE_CAPSULE = 3
+SHAPE_POLYGON = 4
 
 
 class ErrorHandler:
@@ -81,17 +75,23 @@ class Image:
         self.name = name
         self.__original = (surface if surface else pg.Surface((width, height), pg.SRCALPHA)).convert_alpha()
         self.current = self.__original.copy()
-        self.offset = pg.Vector2()
+        self.drawingOffset = pg.Vector2()
+        self.__rotationOffset = pg.Vector2()
+        self.__pivotOffset = pg.Vector2()
         self.__rotation = 0
         self.__size = (width, height)
         self.__opacity = 1
         self.__flipX = False
         self.__flipY = False
-        self.__surfaceUpdateRequired = False
+        self.__surfaceUpdateRequired = True
     
     @property
     def size(self):
         return self.__size
+    
+    @property
+    def center(self):
+        return pg.Vector2(self.GetSurface().size) / 2 
     
     @property
     def rotation(self):
@@ -106,6 +106,10 @@ class Image:
     def rotation(self, value: float):
         self.__rotation = value
         self.UpdateSurface()
+
+    def RotateWithPivotOffset(self, value: float, pivotOffset: tuple[int, int] | pg.Vector2):
+        self.rotation += value
+        self.__pivotOffset.xy = pivotOffset
 
     @property
     def opacity(self):
@@ -142,9 +146,18 @@ class Image:
 
         if geometry.shapeType == SHAPE_CAPSULE:
             self.__original = pg.transform.scale(self.__original, (geometry.radius * 2, geometry.radius * 2 + geometry.height))
-            mask = pg.Surface((geometry.radius * 2, geometry.radius * 2)).convert_alpha()
+            mask = pg.Surface((geometry.radius * 2, geometry.radius * 2 + geometry.height)).convert_alpha()
             mask.fill((255, 255, 255, 255))
-            pg.draw.rect(mask, (0, 0, 0, 0), (0, 0, self.radius * 2, self.height + self.radius * 2), border_radius=self.radius)
+            pg.draw.rect(mask, (0, 0, 0, 0), (0, 0, geometry.radius * 2, geometry.height + geometry.radius * 2), border_radius=geometry.radius)
+            self.__original.blit(mask, (0, 0), special_flags=pg.BLEND_RGBA_SUB)
+
+        if geometry.shapeType == SHAPE_POLYGON:
+            aabb: AABB = geometry.GetAABB()
+            self.__original = pg.transform.scale(self.__original, (aabb.width, aabb.height))
+            mask = pg.Surface((aabb.width, aabb.height)).convert_alpha()
+            mask.fill((255, 255, 255, 255))
+            surfaceVertices = [vertex - aabb.min for vertex in geometry.GetTransformedVertices()]
+            pg.draw.polygon(mask, (0, 0, 0, 0), surfaceVertices)
             self.__original.blit(mask, (0, 0), special_flags=pg.BLEND_RGBA_SUB)
 
         self.UpdateSurface()
@@ -171,6 +184,11 @@ class Image:
 
         self.current.set_alpha(round(self.__opacity * 255))
 
+        self.__rotationOffset = -self.__pivotOffset
+        self.__rotationOffset.rotate_ip(self.__rotation)
+
+        self.__pivotOffset.xy = (0, 0)
+
         self.__surfaceUpdateRequired = False
 
         return self.current
@@ -180,23 +198,18 @@ class Image:
         copy.offset = self.offset.copy()
         return copy
 
-    # def DrawOn(self, surface: pg.Surface, position: pg.Vector2, camera):
-    #     if camera:
-    #         surface.blit(pg.transform.scale_by(self.GetSurface(), camera.zoom), (position + self.offset - camera.position) * camera.zoom)
-    #         return
-        
-    #     surface.blit(self.current, position + self.offset)
+    def RenderOn(self, surface: pg.Surface, center: pg.Vector2):
+        surface.blit(self.GetSurface(), center + self.drawingOffset + self.__rotationOffset - self.center)
 
     def Fill(self, color):
         self.__original.fill(color)
         self.UpdateSurface()
 
-    def DrawRect(self, color, rect, width: int = -1, borderRadius: int = -1):
+    def DrawRect(self, color, rect: pg.Rect | tuple, width: int = 0, borderRadius: int = -1):
+        rect = pg.Rect(rect)
+        rect.w *= self.__original.size[0] / self.__size[0]
+        rect.h *= self.__original.size[1] / self.__size[1]
         pg.draw.rect(self.__original, color, rect, width, borderRadius)
-        self.UpdateSurface()
-
-    def DrawCircle(self, color, center, radius: int, width: int = -1):
-        pg.draw.circle(self.__original, color, center, radius, width)
         self.UpdateSurface()
 
     def __str__(self):
@@ -215,19 +228,28 @@ class AABB:
         self.min = pg.Vector2(min)
         self.max = pg.Vector2(max)
 
-        self.width = max.x - min.x
-        self.height = max.y - min.y
+        self.size = max - min
+        self.width, self.height = tuple(self.size)
 
 class Geometry:
     @overload
-    def __init__(self, x: float, y: float, radius: float): ...
+    def __init__(self, x: float, y: float, radius: float): 
+        """Circle geometry""" 
+        ...
 
     @overload
-    def __init__(self, x: float, y: float, radius: float, height: float): ...
+    def __init__(self, x: float, y: float, radius: float, height: float): 
+        """Capsule geometry""" 
+        ...
 
     @overload
     def __init__(self, x: float, y: float, size: pg.Vector2 | tuple[int, int]): 
         """Box geometry""" 
+        ...
+
+    @overload
+    def __init__(self, x: float, y: float, points: list[pg.Vector2]): 
+        """Polygon geometry (WIP)""" 
         ...
 
     def __init__(self, *args):
@@ -235,17 +257,23 @@ class Geometry:
         self.__radius = 0
         self.__width = 0
         self.__height = 0
+        self.__area = 0
 
         if len(args) == 4:
             self.__shapeType = SHAPE_CAPSULE
             self.__radius = args[2]
             self.__height = args[3]
+            self.__area = self.__radius ** 2 * math.pi + self.__height * self.__radius * 2
         elif isinstance(args[2], (int, float)):
             self.__shapeType = SHAPE_CIRCLE
             self.__radius = args[2]
-        elif isinstance(args[2], (tuple, pg.Vector2)):
+            self.__area = self.__radius ** 2 * math.pi
+        elif isinstance(args[2], (tuple, pg.Vector2)) and len(args[2]) == 2:
             self.__shapeType = SHAPE_BOX
             self.__width, self.__height = tuple(args[2])
+            self.__area = self.__width * self.__height
+        elif isinstance(args[2], (list, tuple)):
+            self.__shapeType = SHAPE_POLYGON
         else:
             ErrorHandler.Throw("TypeError", "Geometry", "__init__", None, "Unknown realization")
         
@@ -256,63 +284,82 @@ class Geometry:
         self.__aabbUpdateRequired = True
         self.__anchorsUpdateRequired = True
 
-        self.vertices: list[pg.Vector2] = []
+        self._vertices: list[pg.Vector2] = []
         self.__aabb: AABB = None
 
-        self.anchors: list[pg.Vector2] = []
+        self.__anchors: list[pg.Vector2] = []
         self.__transformedAnchors: list[pg.Vector2] = []
 
         if self.__shapeType == SHAPE_BOX:
-            self.vertices = self._createBoxVertices(self.__width, self.__height)
+            self._vertices = self._createBoxVertices(self.__width, self.__height)
 
         if self.__shapeType == SHAPE_CAPSULE:
-            self.vertices = self.__createCapsuleVertices(self.__height)
+            self._vertices = self.__createCapsuleVertices(self.__height)
 
-        self.__transformedVertices: list[pg.Vector2] = [pg.Vector2() for _ in range(len(self.vertices))]
+        if self.__shapeType == SHAPE_POLYGON:
+            if len(args[2]) < 2:
+                ErrorHandler.Throw("NotEnoughPointError", "Geometry", "__init__", None, "Polygon has at least 3 points")
+
+            self._vertices = [pg.Vector2(i) for i in args[2]]
+            center = pg.Vector2(
+                sum([vertex.x for vertex in self._vertices]) / len(self._vertices),
+                sum([vertex.y for vertex in self._vertices]) / len(self._vertices)
+            )
+            self._vertices.sort(key=lambda vertex: math.atan2(vertex.y - center.y, vertex.x - center.x))
+            for vertex in self._vertices:
+                vertex -= center
+
+            self.__area = self.__calculateAreaForPolygon(self._vertices)
+
+        self.__transformedVertices: list[pg.Vector2] = [pg.Vector2() for _ in range(len(self._vertices))]
+
+        self.__pivotOffset = pg.Vector2(0, 0)
+        self.__lastPivotOffset = pg.Vector2(0, 0)
 
         self.cannotCollideWith = []
+    
+    def __calculateAreaForPolygon(self, vertices: list[pg.Vector2]):
+        area = 0
+        for i in range(1, len(vertices) - 1):
+            v1 = vertices[i + 1] - vertices[0]
+            v2 = vertices[i] - vertices[0]
+            area += v1.cross(v2) / 2
+
+        return abs(area)
 
     @property
     def shapeType(self):
         return self.__shapeType
 
     @property
+    def area(self):
+        return self.__area
+
+    @property
     def radius(self):
         if self.shapeType in [SHAPE_CIRCLE, SHAPE_CAPSULE]:
             return self.__radius
         
-        ErrorHandler.Throw("InvalidProperty", "Geometry", None, "radius", "You cannot get the \"radius\" property of \"Box\" Geometry")
+        ErrorHandler.Throw("InvalidProperty", "Geometry", None, "radius", "You cannot get the \"radius\" property of \"Box\" or \"Polygon\" Geometry")
 
     @property
     def width(self):
         if self.shapeType == SHAPE_BOX:
             return self.__width
         
-        ErrorHandler.Throw("InvalidProperty", "Geometry", None, "width", "You cannot get the \"radius\" property of \"Circle\" or \"Capsule\" Geometry")
+        ErrorHandler.Throw("InvalidProperty", "Geometry", None, "width", "You cannot get the \"width\" property of \"Circle\", \"Capsule\" or \"Polygon\" Geometry")
     
     @property
     def height(self):
         if self.shapeType in [SHAPE_BOX, SHAPE_CAPSULE]:
-            return self.__height + self.__radius * 2
+            return self.__height
         
-        ErrorHandler.Throw("InvalidProperty", "Geometry", None, "height", "You cannot get the \"height\" property of \"Circle\" Geometry")
-
-    # @classmethod
-    # def Box(cls, x: float, y: float, width: float, height: float):
-    #     return cls(x, y, 0, width, height, SHAPE_BOX)
-    
-    # @classmethod
-    # def Circle(cls, x: float, y: float, radius: float):
-    #     return cls(x, y, radius, 0, 0, SHAPE_CIRCLE)
-
-    # @classmethod
-    # def Capsule(cls, x: float, y: float, height: float, radius: float):
-    #     return cls(x, y, radius, 0, height - radius * 2, SHAPE_CAPSULE)
+        ErrorHandler.Throw("InvalidProperty", "Geometry", None, "height", "You cannot get the \"height\" property of \"Circle\" or \"Polygon\" Geometry")
 
     def Update(self):
+        self.__anchorsUpdateRequired = True
         self.__transformUpdateRequired = True
         self.__aabbUpdateRequired = True
-        self.__anchorsUpdateRequired = True
 
     def _createBoxVertices(self, width: int, height: int):
         left =  -width / 2
@@ -331,7 +378,7 @@ class Geometry:
         
         return [pg.Vector2(0, top),
                 pg.Vector2(0, bottom)]
-    
+
     def Move(self, value: pg.Vector2 | tuple[int, int]):
         if not (value[0] == 0 and value[1] == 0):
             self.__position += pg.Vector2(value)
@@ -346,6 +393,7 @@ class Geometry:
         if not (value[0] == self.__position[0] and value[1] == self.__position[1]):
             self.__position = pg.Vector2(value[0], value[1])
             self.__transformUpdateRequired = True
+            self.__anchorsUpdateRequired = True
             self.__aabbUpdateRequired = True
 
     @property
@@ -356,12 +404,13 @@ class Geometry:
     def angleRadians(self):
         return self.__angle
 
-    def Rotate(self, value: int):
-        self.RotateRadians(math.radians(value))
+    def Rotate(self, value: int, pivotOffset: tuple[int, int] | pg.Vector2 = (0, 0)):
+        self.RotateRadians(math.radians(value), pivotOffset)
 
-    def RotateRadians(self, value: int):
+    def RotateRadians(self, value: int, pivotOffset: tuple[int, int] | pg.Vector2 = (0, 0)):
         if value != 0:
             self.__angle += value
+            self.__pivotOffset = pg.Vector2(pivotOffset)
             self.__transformUpdateRequired = True
             self.__aabbUpdateRequired = True
 
@@ -377,7 +426,7 @@ class Geometry:
 
     def ScaleBy(self, value: float):
         if self.shapeType == SHAPE_BOX:
-            for vertex in self.vertices:
+            for vertex in self._vertices:
                 vertex.scale_to_length(vertex.length() * value)
             self.__width *= value
             self.__height *= value
@@ -386,9 +435,10 @@ class Geometry:
             self.__radius *= value
 
         elif self.shapeType == SHAPE_CAPSULE:
-            for vertex in self.vertices:
+            for vertex in self._vertices:
                 vertex.scale_to_length(vertex.length() * value)
             self.__radius *= value
+            self.__height *= value
 
     def GetAABB(self):
         if self.__aabbUpdateRequired:
@@ -428,8 +478,15 @@ class Geometry:
             sin = math.sin(self.__angle)
             cos = math.cos(self.__angle)
 
-            for i in range(len(self.vertices)):
-                vector = self.vertices[i]
+            if not self.__pivotOffset.xy == (0, 0):
+                self.__position += self.__lastPivotOffset
+                self.__pivotOffset.rotate_rad_ip(self.__angle)
+                self.__lastPivotOffset.xy = self.__pivotOffset.xy
+                self.__position -= self.__pivotOffset
+                self.__pivotOffset.xy = (0, 0)
+
+            for i in range(len(self._vertices)):
+                vector = self._vertices[i]
                 self.__transformedVertices[i] = TransformVector(vector, self.__position, sin, cos)
 
             self.__transformUpdateRequired = False
@@ -437,7 +494,7 @@ class Geometry:
         return self.__transformedVertices
     
     def AddAnchor(self, anchor: pg.Vector2 | tuple):
-        self.anchors.append(pg.Vector2(anchor))
+        self.__anchors.append(pg.Vector2(anchor))
         self.__transformedAnchors.append(pg.Vector2())
         self.__anchorsUpdateRequired = True
     
@@ -446,24 +503,30 @@ class Geometry:
             sin = math.sin(self.__angle)
             cos = math.cos(self.__angle)
 
-            for i in range(len(self.anchors)):
-                self.__transformedAnchors[i] = TransformVector(self.anchors[i], self.__position, sin, cos)
+            for i in range(len(self.__anchors)):
+                self.__transformedAnchors[i] = TransformVector(self.__anchors[i], self.__position, sin, cos)
 
             self.__anchorsUpdateRequired = False
-        
+
         if index < 0 or index >= len(self.__transformedAnchors):
             return None
 
         return self.__transformedAnchors[index]
+    
+    def RemoveAnchor(self, index: int):
+        if index > 0 and index < len(self.__anchorsUpdateRequired):
+            self.__anchors.pop(index)
+            return
+        ErrorHandler.Throw("IndexOutOfRange", "Geometry", "RemoveAnchor", None, "Anchor index is out of anchors list range")
 
     def DrawOnScreen(self, screen: pg.Surface, color: str | pg.Color | tuple[int, int, int], width: int, cameraPosition: pg.Vector2):
-        camPos = cameraPosition
+        camPos = cameraPosition - pg.Vector2(screen.size) / 2
         position = self.__position - camPos
 
         if self.shapeType == SHAPE_CIRCLE:
             pg.draw.circle(screen, color, position, self.radius, width)
 
-        if self.shapeType == SHAPE_BOX:
+        if self.shapeType in [SHAPE_BOX, SHAPE_POLYGON]:
             vertices = [i - camPos for i in self.GetTransformedVertices()]
             pg.draw.polygon(screen, color, vertices, width)
 
@@ -482,8 +545,18 @@ class Geometry:
             pg.draw.line(screen, color, vertices[0] + radiusLine, vertices[1] + radiusLine, width)
             pg.draw.line(screen, color, vertices[0] - radiusLine, vertices[1] - radiusLine, width)
 
+    def GetStringShape(self):
+        if self.__shapeType == SHAPE_BOX:
+            return "box"
+        if self.__shapeType == SHAPE_CIRCLE:
+            return "circle"
+        if self.__shapeType == SHAPE_CAPSULE:
+            return "capsule"
+        if self.__shapeType == SHAPE_POLYGON:
+            return "polygon"
+
     def __str__(self):
-        return f"Geometry(pos: {self.__position}, angle: {self.__angle}, size:[{self.width}, {self.height}])"
+        return f"Geometry(pos: {self.__position}, angle (rad): {round(self.__angle, 5)}, shape: \"{self.GetStringShape()}\")"
     
     def __repr__(self):
         return self.__str__()
@@ -652,7 +725,7 @@ class collisions:
 
             return closestPoint + direction.normalize() * capsule.radius, None, 1
         
-        if (first.shapeType == SHAPE_CAPSULE and second.shapeType == SHAPE_BOX) or (second.shapeType == SHAPE_CAPSULE and first.shapeType == SHAPE_BOX):
+        if (first.shapeType == SHAPE_CAPSULE and second.shapeType in [SHAPE_BOX, SHAPE_POLYGON]) or (second.shapeType == SHAPE_CAPSULE and first.shapeType in [SHAPE_BOX, SHAPE_POLYGON]):
             capsule, box = (first, second) if first.shapeType == SHAPE_CAPSULE else (second, first)
             verticesA = box.GetTransformedVertices()
             verticesB = capsule.GetTransformedVertices()
@@ -696,7 +769,7 @@ class collisions:
         if first.shapeType == SHAPE_CIRCLE and second.shapeType == SHAPE_CIRCLE:
             return first.position + (second.position - first.position).normalize() * first.radius, None, 1
         
-        if first.shapeType == SHAPE_BOX and second.shapeType == SHAPE_BOX:
+        if first.shapeType in [SHAPE_BOX, SHAPE_POLYGON] and second.shapeType in [SHAPE_BOX, SHAPE_POLYGON]:
             contact1 = pg.Vector2()
             contact2 = pg.Vector2()
             contactCount = 0
@@ -744,7 +817,7 @@ class collisions:
 
             return contact1, contact2, contactCount
         
-        if (first.shapeType == SHAPE_CIRCLE and second.shapeType == SHAPE_BOX) or (second.shapeType == SHAPE_CIRCLE and first.shapeType == SHAPE_BOX):
+        if (first.shapeType == SHAPE_CIRCLE and second.shapeType in [SHAPE_BOX, SHAPE_POLYGON]) or (second.shapeType == SHAPE_CIRCLE and first.shapeType in [SHAPE_BOX, SHAPE_POLYGON]):
             circle, box = (first, second) if first.shapeType == SHAPE_CIRCLE else (second, first)
             vertices = box.GetTransformedVertices()
 
@@ -970,14 +1043,14 @@ class collisions:
         if (first.shapeType == SHAPE_CIRCLE and second.shapeType == SHAPE_CIRCLE):
             isCollided, normal, depth = collisions.IntersectCircles(first.position, first.radius, second.position, second.radius)
         
-        elif (first.shapeType == SHAPE_BOX and second.shapeType == SHAPE_BOX):
+        elif (first.shapeType in [SHAPE_BOX, SHAPE_POLYGON] and second.shapeType in [SHAPE_BOX, SHAPE_POLYGON]):
             isCollided, normal, depth = collisions.IntersectPolygons(first.GetTransformedVertices(), first.position, second.GetTransformedVertices(), second.position)
             
-        elif ((first.shapeType == SHAPE_BOX and second.shapeType == SHAPE_CIRCLE) or (second.shapeType == SHAPE_BOX and first.shapeType == SHAPE_CIRCLE)):
-            polygon = second if second.shapeType == SHAPE_BOX else first
+        elif ((first.shapeType in [SHAPE_BOX, SHAPE_POLYGON] and second.shapeType == SHAPE_CIRCLE) or (second.shapeType in [SHAPE_BOX, SHAPE_POLYGON] and first.shapeType == SHAPE_CIRCLE)):
+            polygon = second if second.shapeType in [SHAPE_BOX, SHAPE_POLYGON] else first
             circle = first if first.shapeType == SHAPE_CIRCLE else second
 
-            isCollided, normal, depth = collisions.IntersectPolygonCircle(polygon.GetTransformedVertices(), polygon.position, circle.radius, circle.position, first.shapeType == SHAPE_BOX)
+            isCollided, normal, depth = collisions.IntersectPolygonCircle(polygon.GetTransformedVertices(), polygon.position, circle.radius, circle.position, first.shapeType in [SHAPE_BOX, SHAPE_POLYGON])
 
         elif ((first.shapeType == SHAPE_CAPSULE and second.shapeType == SHAPE_CIRCLE) or (second.shapeType == SHAPE_CAPSULE and first.shapeType == SHAPE_CIRCLE)):
             capsule = second if second.shapeType == SHAPE_CAPSULE else first
@@ -985,11 +1058,11 @@ class collisions:
 
             isCollided, normal, depth = collisions.IntersectCapsuleCircle(capsule.radius, capsule.GetTransformedVertices(), circle.position, circle.radius) #, first.shapeType == SHAPE_BOX
 
-        elif ((first.shapeType == SHAPE_CAPSULE and second.shapeType == SHAPE_BOX) or (second.shapeType == SHAPE_CAPSULE and first.shapeType == SHAPE_BOX)):
-            polygon = second if second.shapeType == SHAPE_BOX else first
+        elif ((first.shapeType == SHAPE_CAPSULE and second.shapeType in [SHAPE_BOX, SHAPE_POLYGON]) or (second.shapeType == SHAPE_CAPSULE and first.shapeType in [SHAPE_BOX, SHAPE_POLYGON])):
+            polygon = second if second.shapeType in [SHAPE_BOX, SHAPE_POLYGON] else first
             capsule = first if first.shapeType == SHAPE_CAPSULE else second
 
-            isCollided, normal, depth = collisions.IntersectPolygonCapsule(polygon.GetTransformedVertices(), polygon.position, capsule.GetTransformedVertices(), capsule.radius, capsule.height, capsule.position, first.shapeType == SHAPE_BOX)
+            isCollided, normal, depth = collisions.IntersectPolygonCapsule(polygon.GetTransformedVertices(), polygon.position, capsule.GetTransformedVertices(), capsule.radius, capsule.height, capsule.position, first.shapeType in [SHAPE_BOX, SHAPE_POLYGON])
 
         return isCollided, normal, depth
     
@@ -1016,7 +1089,7 @@ class collisions:
             vertices = geometry.GetTransformedVertices()
             return collisions.PointSegmentDistanceSquared(point, vertices[0], vertices[1])[1] < geometry.radius**2
         
-        elif geometry.shapeType == SHAPE_BOX:
+        elif geometry.shapeType in [SHAPE_BOX, SHAPE_POLYGON]:
             vertices = geometry.GetTransformedVertices()
             
             collision = False
@@ -1064,7 +1137,7 @@ class Frame:
     def Copy(self):
         return Frame(self.image.Copy(), self.duration)
 
-class Animation:
+class FrameAnimation:
     def __init__(self, name: str, frames: list[Frame]):
         self.name = name
         self.frames = frames
@@ -1075,35 +1148,19 @@ class Animation:
         self.__timerToNextFrame = 0
     
     def Copy(self):
-        return Animation(self.name, [frame.Copy() for frame in self.frames])
+        return FrameAnimation(self.name, [frame.Copy() for frame in self.frames])
 
     @classmethod
     def FromOneFrame(self, name: str, filePath: str, scaleFrameBy: float = 1):
         surface = pg.transform.scale_by(pg.image.load(filePath), scaleFrameBy).convert_alpha()
-        return Animation(name, [Frame(Image("Frame", surface.get_width(), surface.get_height(), surface), 1)])
+        return FrameAnimation(name, [Frame(Image("Frame", surface.get_width(), surface.get_height(), surface), 1)])
 
     @classmethod
-    def FromGIF(cls, filePath: str, name: str, framesDuration: int, scaleFramesBy: float = 1):
-        if not pillowImported:
-            ErrorHandler.Throw("ImportError", "Animation", "FromGIF", None, "You have to install \"Pillow\" before using \"Animation.FromGIF\"")
-
-        img = pillowImage.open(filePath)
-
-        frames = []
-
-        try:
-            for i in range(img.n_frames):
-                img.seek(i)
-                frame = img.convert("RGBA")
-                
-                data = frame.tobytes()
-                size = frame.size
-                
-                frames.append(Frame(Image(f"Frame {i}", size[0] * scaleFramesBy, size[1] * scaleFramesBy, pg.transform.scale_by(pg.image.frombytes(data, size, "RGBA"), scaleFramesBy)), framesDuration))
-        except EOFError:
-            pass
-
-        return cls(name, frames)
+    def FromGIF(cls, filePath: str, name: str, scaleFramesBy: float = 1):
+        return cls(name, [
+            Frame(Image(f"Frame {idx}", gifFrame[0].width * scaleFramesBy, gifFrame[0].height * scaleFramesBy, pg.transform.scale_by(gifFrame[0], scaleFramesBy)), gifFrame[1])
+            for idx, gifFrame in enumerate(pg.image.load_animation(filePath))
+        ])
 
     def Update(self, surface: pg.Surface, flip: dict, dt: float):
         if self.__playing:
@@ -1154,10 +1211,10 @@ class Animation:
         self.__timerToNextFrame = 0
         self.__currentFrame = 0
 
-class Animator(Component):
+class FrameAnimator(Component):
     def __init__(self):
         super().__init__("object")
-        self.__animations: list[Animation] = []
+        self.__animations: list[FrameAnimation] = []
         self.__currentAnimation = 0
         self._flip = {"X": False, "Y": False}
 
@@ -1209,7 +1266,7 @@ class Animator(Component):
                 self.StopAnimationByIndex(index)
                 return
 
-    def AddAnimation(self, animation: Animation):
+    def AddAnimation(self, animation: FrameAnimation):
         self.__animations.append(animation)
 
     def RemoveAnimation(self, animationName: str):
@@ -1217,6 +1274,266 @@ class Animator(Component):
             if animation.name == animationName:
                 self.__animations.pop(index)
                 break
+
+
+def linear(x: float):
+    return x
+
+def cubicBezier(x1, y1, x2, y2):
+    def function(t):
+        if t <= 0:
+            return 0.0
+        if t >= 1:
+            return 1.0
+        
+        s = t
+        epsilon = 1e-6
+        
+        for _ in range(8):
+            x = 3 * (1 - s)**2 * s * x1 + 3 * (1 - s) * s**2 * x2 + s**3
+
+            dx = 3 * (1 - s) * (1 - 3 * s) * x1 + 3 * (2 * s - 3 * s**2) * x2 + 3 * s**2
+            
+            if abs(dx) < epsilon:
+                break
+                
+            xDiff = x - t
+            s -= xDiff / dx
+            
+            if abs(xDiff) < epsilon:
+                break
+        
+        return 3 * (1 - s)**2 * s * y1 + 3 * (1 - s) * s**2 * y2 + s**3
+    
+    return function
+
+def easeOutCubic(x: float):
+    return 1 - math.pow(1 - x, 3)
+
+def easeInOutCubic(x: float):
+    return 4 * x ** 3 if x < 0.5 else 1 - math.pow(-2 * x + 2, 3) / 2
+
+def easeInCubic(x: float):
+    return x ** 3
+
+def easeInOutBack(x: float):
+    c1 = 1.70158
+    c2 = c1 * 1.525
+
+    return (math.pow(2 * x, 2) * ((c2 + 1) * 2 * x - c2)) / 2 if x < 0.5 else (math.pow(2 * x - 2, 2) * ((c2 + 1) * (x * 2 - 2) + c2) + 2) / 2
+
+def easeInOutQuint(x: float):
+    return 16 * x ** 5 if x < 0.5 else 1 - math.pow(-2 * x + 2, 5) / 2
+
+def easeOutElastic(x: float):
+    return 0 if x == 0 else 1 if x == 1 else (math.pow(2, -10 * x) * math.sin((x * 10 - 0.75) * ((2 * math.pi) / 3)) + 1)
+
+def easeOutBounce(x: float):
+    n1 = 7.5625
+    d1 = 2.75
+
+    if (x < 1 / d1):
+        return n1 * x ** 2
+    elif (x < 2 / d1):
+        x -= 1.5 / d1
+        return n1 * x ** 2 + 0.75
+    elif (x < 2.5 / d1):
+        x -= 2.25 / d1
+        return n1 * x ** 2 + 0.9375
+    else:
+        x -= 2.625 / d1
+        return n1 * x ** 2 + 0.984375
+
+class Keyframe:
+    def __init__(self, values: list[int], time: float = 0.5, function = easeInOutCubic):
+        self.List = list(values)
+        self.TransitionTime = time if time > 0.01 else 0.01
+        self.EasingFunction = function
+
+    def __str__(self):
+        return f"Keyframe({self.List}, {self.TransitionTime}, {self.EasingFunction.__name__})"
+
+    def Copy(self):
+        return Keyframe(self.List, self.TransitionTime, self.EasingFunction)
+    
+class KeyframeTransition:
+    def __init__(self):
+        self.__keyframes: list[Keyframe] = []
+
+        self.__active = True
+        self.__looping = False
+        self.Round = False
+
+        self.__currentKeyframe: Keyframe = None
+        self.__currentKeyframeIndex = 0
+
+        self.__isInProcess = False
+        self.__process = 0
+        self.__processKeyframesFrom: Keyframe = None
+        self.__processKeyframesTo: Keyframe = None
+        self.__processTransitionTime = 0.5
+
+    def GetKeyframeValue(self):
+        if self.__currentKeyframe:
+            return self.__currentKeyframe.List
+        
+        if len(self.__keyframes) > 0:
+            return self.__keyframes[0].List
+        
+        return None
+    
+    def AddKeyframe(self, keyframe: Keyframe):
+        if not isinstance(keyframe, Keyframe):
+            return False
+        
+        for i in keyframe.List:
+            if not isinstance(i, (int, float)):
+                return False
+            
+        self.__keyframes.append(keyframe)
+
+        return True
+    
+    def SetLooping(self, value: bool):
+        self.__looping = value
+
+    def SetActive(self, value: bool):
+        self.__active = value
+    
+    def IsActive(self):
+        return self.__active
+
+    def SetTransitionTime(self, time: float, replace: float = None):
+        for keyframe in self.__keyframes:
+            if replace is None:
+                keyframe.TransitionTime = time
+            elif keyframe.TransitionTime == replace:
+                keyframe.TransitionTime = time
+
+    def SetEasingFunction(self, function):
+        for keyframe in self.__keyframes:
+            keyframe.EasingFunction = function
+    
+    def __incCurrentKeyframeIndex(self):
+        self.__currentKeyframeIndex += 1
+
+        if self.__currentKeyframeIndex >= len(self.__keyframes):
+            self.__currentKeyframeIndex = 0
+            if not self.__looping:
+                self.__active = False
+                self.__isInProcess = False
+                self.__process = 0
+
+    def ToNextKeyframe(self):
+        if len(self.__keyframes) > 1:
+            self.SetKeyFromTo(self.__keyframes[self.__currentKeyframeIndex],
+                                self.__keyframes[(self.__currentKeyframeIndex + 1) % len(self.__keyframes)])
+            
+            self.__incCurrentKeyframeIndex()
+
+    def SetKeyFromTo(self, keyFrom: Keyframe, keyTo: Keyframe):
+        self.__processTransitionTime = keyTo.TransitionTime
+        self.__processKeyframesTo = keyTo
+
+        if not self.__isInProcess:
+            self.__processKeyframesFrom = keyFrom
+        else:
+            self.__processKeyframesFrom = self.__currentKeyframe
+            
+            self.__process = 0
+
+        self.__isInProcess = True
+
+    def GetSavedKeyframe(self, index: int):
+        return self.__keyframes[index].Copy() if index < len(self.__keyframes) else None
+    
+    def IsInProcess(self):
+        return self.__isInProcess
+
+    def GetCurrentKeyframeIndex(self):
+        return self.__currentKeyframeIndex
+
+    def Update(self, delta: float):
+        if not self.__active:
+            return
+        if self.__isInProcess:
+            self.__process += delta
+
+            if self.__process / self.__processTransitionTime > 1:
+                self.__process = 1 * self.__processTransitionTime
+
+            first: list[int] = self.__processKeyframesFrom.List
+            second: list[int] = self.__processKeyframesTo.List
+
+            easing = self.__processKeyframesTo.EasingFunction
+
+            self.__currentKeyframe = self.__processKeyframesFrom.Copy()
+            if len(first) < len(second):
+                for i in range(len(first), len(second)):
+                    self.__currentKeyframe.List.append(second[i])
+
+            less = len(second) if len(second) < len(first) else len(first)
+
+            for index in range(less):
+                self.__currentKeyframe.List[index] = (first[index] + (second[index] - first[index]) * easing(self.__process / self.__processTransitionTime))
+
+        if self.__process / self.__processTransitionTime == 1:
+            self.__isInProcess = False
+            self.__process = 0
+
+        if not self.__currentKeyframe and self.__keyframes:
+            self.__currentKeyframe = self.__keyframes[0]
+
+        if self.Round:
+            self.__currentKeyframe.List = list(map(round, self.__currentKeyframe.List))
+
+class KeyframeAnimation(KeyframeTransition):
+    def __init__(self):
+        super().__init__()
+        self.__keyframesStartDelays = []
+        self.__time = 0
+
+    def AddKeyframe(self, keyframe: Keyframe, delay: float):
+        """Delay argument is how long will it stay on this keyframe"""
+        super().AddKeyframe(keyframe)
+        self.__keyframesStartDelays.append(delay)
+
+    def Update(self, delta):
+        if not len(self.__keyframesStartDelays) or not self.IsActive():
+            return
+        
+        if not self.IsInProcess():
+            self.__time += delta
+            if self.__time < self.__keyframesStartDelays[self.GetCurrentKeyframeIndex()]:
+                return
+            
+            self.__time = 0
+            self.ToNextKeyframe()
+
+        super().Update(delta)
+
+
+# class ObjectAnimationField:
+#     def __init__(self, field: str, parametersCount: int):
+#         self.field = field
+#         self.parametersCount = parametersCount
+
+#     def GetCopy(self):
+#         return ObjectAnimationField(self.field, self.parametersCount)
+
+# class KeyframeAnimator(Component):
+#     def __init__(self, fields: list[ObjectAnimationField]):
+#         super().__init__("object")
+#         self.__fields = {field.field: [field.GetCopy(), KeyframeAnimation()] for field in fields}
+
+#         # self.__time = 0
+
+#     def AddKeyframe(self, field: str, keyframe: Keyframe):
+#         if field not in self.__fields.keys():
+#             pass
+
+#     def Update(self, dt: float):
+#         pass
 
 
 class PhysicsMaterial:
@@ -1237,7 +1554,6 @@ class Rigidbody(Component):
 
         self.mass = 0
         self.invMass = 0
-        self.area = 0
         self.inertia = 0
         self.invInertia = 0
         self.material = material
@@ -1281,24 +1597,53 @@ class Rigidbody(Component):
         if not self.__isStatic:
             self.invInertia = 1 / self.inertia
 
+    def __calculateInertiaForPolygon(self, vertices: list[pg.Vector2], area: float):
+        n = len(vertices)
+        
+        Cx, Cy = 0.0, 0.0
+        for i in range(n):
+            xi, yi = vertices[i]
+            xi1, yi1 = vertices[(i + 1) % n]
+            crossTerm = xi * yi1 - xi1 * yi
+            Cx += (xi + xi1) * crossTerm
+            Cy += (yi + yi1) * crossTerm
+        Cx /= 6 * area
+        Cy /= 6 * area
+        
+        Ix, Iy = 0.0, 0.0
+        for i in range(n):
+            xi, yi = vertices[i]
+            xi1, yi1 = vertices[(i + 1) % n]
+            crossTerm = xi * yi1 - xi1 * yi
+            Ix += (yi**2 + yi * yi1 + yi1**2) * crossTerm
+            Iy += (xi**2 + xi * xi1 + xi1**2) * crossTerm
+        Ix /= 12
+        Iy /= 12
+        
+        IxCm = Ix - area * Cy**2
+        IyCm = Iy - area * Cx**2
+        
+        return abs(IxCm + IyCm)
+
     def Init(self):
         super().Init()
         self.__shape = self._object.geometry
 
         if self.shape.shapeType == SHAPE_CAPSULE:
-            self.area = self.shape.radius ** 2 * math.pi + self.shape.height * self.shape.radius * 2
-            self.mass = (self.area / 37.93**2 / 10000) * self.material.density
+            self.mass = (self.shape.area / 37.93**2 / 10000) * self.material.density
             self.inertia = 0.5 * self.mass * self.shape.radius**2 + (1 / 12) * self.mass * ((self.shape.radius * 2)**2 + self.shape.height**2)
 
         elif self.shape.shapeType == SHAPE_CIRCLE:
-            self.area = self.shape.radius ** 2 * math.pi
-            self.mass = (self.area / 37.93**2 / 10000) * self.material.density
+            self.mass = (self.shape.area / 37.93**2 / 10000) * self.material.density
             self.inertia = 0.5 * self.mass * self.shape.radius**2
 
         elif self.shape.shapeType == SHAPE_BOX:
-            self.area = self.shape.width * self.shape.height
-            self.mass = (self.area / 37.93**2 / 10000) * self.material.density
+            self.mass = (self.shape.area / 37.93**2 / 10000) * self.material.density
             self.inertia = (1 / 12) * self.mass * (self.shape.width**2 + self.shape.height**2)
+
+        elif self.shape.shapeType == SHAPE_POLYGON:
+            self.mass = (self.shape.area / 37.93**2 / 10000) * self.material.density
+            self.inertia = self.__calculateInertiaForPolygon(self.shape._vertices, self.shape.area) / 37.93**2 / 10000 * self.material.density
 
         if not self.__isStatic:
             if not self.__freezedRotations:
@@ -1345,7 +1690,7 @@ class Rigidbody(Component):
         self.angularVelocity += value
 
 
-components = [Animator, Rigidbody]
+components = [FrameAnimator, Rigidbody]
 
 
 class GameObject(object):
@@ -1364,6 +1709,8 @@ class GameObject(object):
         self.__id = GameObject.__gameObjectCount
         self.__destroyed = False
 
+        self._imageToGeometryOffset = pg.Vector2()
+
         GameObject.__gameObjectCount += 1
 
         for name, value in kwargs.items():
@@ -1380,10 +1727,22 @@ class GameObject(object):
                             self.__createImage()
                         self.image.Fill("black")
 
+                case "loadImage":
+                    if not isinstance(value, str):
+                        ErrorHandler.Throw("TypeError", "GameObject", "__init__", "loadImage", "Invalid \"loadImage\" argument type. It must be a string")
+                    if not self.image:
+                        self.__createImage(value)
+
                 case "fillImage":
                     if not self.image:
                         self.__createImage()
                     self.image.Fill(value)
+
+                case "scaleImage":
+                    if not isinstance(value, (int, float)):
+                        ErrorHandler.Throw("TypeError", "GameObject", "__init__", "scaleImage", "Invalid \"scaleImage\" argument type. It must be an integer or float")
+                    if self.image:
+                        self.image.ScaleBy(value)
 
                 case "scale":
                     if not isinstance(value, (int, float)):
@@ -1409,7 +1768,6 @@ class GameObject(object):
 
                     value.AddObject(self)
 
-
     @property
     def id(self):
         return self.__id
@@ -1418,13 +1776,32 @@ class GameObject(object):
     def id(self, value):
         ErrorHandler.Throw("PropertyError", "GameObject", None, "id", "You cannot set the \"id\" property of \"GameObject\" instance")
 
-    def __createImage(self):
+    def __createImage(self, file=None):
         geometryAABB = self.geometry.GetAABB()
-        self.image = self.__game.assets.CreateImage(f"GameObject {self.__id}", geometryAABB.width, geometryAABB.height)      
+        if not file:
+            self.image = self.__game.assets.CreateImage(f"GameObject {self.__id}", geometryAABB.width, geometryAABB.height)      
+        else:
+            self.image = self.__game.assets.LoadImage(file, f"GameObject {self.__id}", width=geometryAABB.width, height=geometryAABB.height)      
 
     def Update(self):
+        self.geometry.Update()
         for component in self.__components.values():
             component.Update(self.__game.time.GetDeltaTime())
+
+        if self.geometry.shapeType == SHAPE_POLYGON and self.image:
+            minVertex = self.geometry._vertices[0].copy()
+            for vertex in self.geometry._vertices:
+                if vertex.x < minVertex.x:
+                    minVertex.x = vertex.x
+                if vertex.y < minVertex.y:
+                    minVertex.y = vertex.y
+            vertices = [vertex - minVertex for vertex in self.geometry._vertices]
+            center = pg.Vector2(
+                sum([vertex.x for vertex in vertices]) / len(vertices),
+                sum([vertex.y for vertex in vertices]) / len(vertices)
+            )
+            self._imageToGeometryOffset.xy = pg.Vector2(self.image.size) / 2 - center
+            self._imageToGeometryOffset.rotate_rad_ip(self.geometry.angleRadians)
 
     def AddComponent(self, component: Component):
         if issubclass(type(component), Component):
@@ -1460,9 +1837,10 @@ class GameObject(object):
     def HasComponent(self, componentType: type):
         return componentType.__name__ in self.__components.keys()
     
-    def Rotate(self, angle):
-        self.image.rotation += angle
-        self.geometry.Rotate(angle)
+    def Rotate(self, angle: float, pivotOffset: tuple[int, int] | pg.Vector2 = (0, 0)):
+        if self.image:
+            self.image.rotation += angle
+        self.geometry.Rotate(angle, pg.Vector2(pivotOffset))
 
     def Destroy(self):
         if self._layer:
@@ -1903,11 +2281,14 @@ class FixedJointWIP(HingeJoint):
         if not self.bodyA.IsStatic():
             self.bodyA.angularVelocity += (self.relativeAngle - (self.bodyA.angle - self.bodyB.angle)) * self.angularStrength
 
-
 class ImageGroup:
     def __init__(self, name: str):
         self.__name = name
         self.__objects: dict[str, Image] = {}
+
+    @property
+    def objects(self) -> dict[str, Image]:
+        return self.__objects
 
     @property
     def name(self):
@@ -1954,8 +2335,8 @@ class Assets:
         self.__imageGroups: dict[str, ImageGroup] = {"All": ImageGroup("All")}
 
     def CreateImageGroup(self, name: str):
-        if self.GetImageGroup(name): 
-            ErrorHandler.ThrowExistanceError
+        if name in self.__imageGroups.keys():
+            ErrorHandler.ThrowExistenceError("Assets", "CreateImageGroup", "image group")
         self.__imageGroups[name] = ImageGroup(name)
 
     def GetImageGroup(self, name: str):
@@ -1970,11 +2351,11 @@ class Assets:
             self.RemoveAllImagesFromGroup(name)
             return self.__imageGroups.pop(name)
 
-    def LoadImage(self, fileName: str, imageName: str = None, group: str = None):
+    def LoadImage(self, fileName: str, imageName: str = None, group: str = None, width: int = 0, height: int = 0):
         surface = pg.image.load(fileName)
         return self.CreateImage(imageName if imageName else fileName, 
-                                 surface.get_width(), 
-                                 surface.get_height(), 
+                                 surface.get_width() if not width else width, 
+                                 surface.get_height() if not height else height, 
                                  group,
                                  surface.convert_alpha())
 
@@ -1990,8 +2371,9 @@ class Assets:
             group.objects.clear()
 
     def GetImage(self, name: str, groupName: str = None):
-        if not groupName or (group := self.GetImageGroup(groupName)) is not None:
-            group = self.__imageGroups[0]
+        group = self.GetImageGroup(groupName) if groupName else self.__imageGroups["All"]
+        if group is None:
+            group = self.__imageGroups["All"]
             
         for image in group.objects:
             if image.name == name:
@@ -2024,16 +2406,18 @@ class Camera:
         self.renderSurface = renderSurface
         self._size = pg.Vector2(size)
         self.__surface = pg.Surface(size, pg.SRCALPHA)
+        self._lookAt = None
+        self._lookAtSmoothness = 1
 
         self.updateRequired = False
 
-    def TransformPointToWorld(self, point: pg.Vector2):
+    def TransformPointToWorld(self, point: pg.Vector2 | tuple[int, int]):
         newPoint = pg.Vector2(point) - pg.Vector2(self.renderSurface.size) / 2
         sin = math.sin(math.radians(self.__rotation))
         cos = math.cos(math.radians(self.__rotation))
         return TransformVector(newPoint, pg.Vector2(), sin, cos) / self.__zoom + self.__position# 
 
-    def TransformPointToScreen(self, point: pg.Vector2):
+    def TransformPointToScreen(self, point: pg.Vector2 | tuple[int, int]):
         newPoint = pg.Vector2(point)# 
         sin = math.sin(math.radians(-self.__rotation))
         cos = math.cos(math.radians(-self.__rotation))
@@ -2076,17 +2460,9 @@ class Camera:
         if isinstance(value, (tuple, pg.Vector2)):
             self.__position = pg.Vector2(value)
 
-    @property
-    def center(self):
-        return self.__position + self._size / 2
-    
-    @center.setter
-    def center(self, value: pg.Vector2 | tuple):
-        if isinstance(value, (tuple, pg.Vector2)):
-            self.__position = value + self._size / 2
-
-    def LookAt(self, point: pg.Vector2 | tuple, smoothness: float = 1):
-        self.position += (pg.Vector2(point) - (self.center)) / smoothness
+    def LookAt(self, object: GameObject, smoothness: float = 1):
+        self._lookAt = object
+        self._lookAtSmoothness = smoothness
 
     def __getRotatedSurfaceSize(self):
         if self.__rotation in [0, 180]:
@@ -2163,11 +2539,14 @@ class Layer:
     def id(self, value):
         ErrorHandler.Throw("PropertyError", "Layer", None, "id", "You cannot set the \"id\" property of \"Layer\" instance")
 
-    def DoesObjectFitInScreen(self, objectPosition: pg.Vector2, objectSize: tuple[int, int], screenSize: tuple[int, int]):
-        return (objectPosition[0] >= -objectSize[0] and 
-                objectPosition[0] <= screenSize[0] and 
-                objectPosition[1] >= -objectSize[1] and
-                objectPosition[1] <= screenSize[1])
+    def DoesObjectFitInScreen(self, leftTopCorner: pg.Vector2, objectSize: tuple[int, int], screenSize: tuple[int, int]):
+        return (leftTopCorner[0] + screenSize[0] / 2 >= -objectSize[0] and
+                leftTopCorner[0] + screenSize[0] / 2 <= screenSize[0] and 
+                leftTopCorner[1] + screenSize[1] / 2 >= -objectSize[1] and
+                leftTopCorner[1] + screenSize[1] / 2 <= screenSize[1])
+
+    def Update(self, dt: float):
+        pass
 
     def Render(self, surface: pg.Surface, cameraPosition: pg.Vector2):
         pass
@@ -2178,21 +2557,47 @@ class ObjectsLayer(Layer):
         super().__init__(name)        
         self.__gameObjects: list[GameObject] = []
 
+        self._showHitboxes = False
+        self._hitboxColor = "red"
+        self._hitboxWidth = 1
+
     def ObjectsCount(self):
         return len(self.__gameObjects)
+    
+    def ShowHitboxes(self, color: str | pg.Color | tuple[int, int, int] = "red", width = 1):
+        self._showHitboxes = True
+        self._hitboxColor = color
+        self._hitboxWidth = pg.math.clamp(width, 0, 100)
 
-    def Render(self, surface: pg.Surface, cameraPosition: pg.Vector2):
+    def HideHitboxes(self):
+        self._showHitboxes = False
+
+    def Update(self, dt):
+        super().Update(dt)
+
         for gameObject in self.__gameObjects:
             gameObject.Update()
 
-            if not gameObject.image:
+    def Render(self, surface: pg.Surface, cameraPosition: pg.Vector2):
+        for gameObject in self.__gameObjects:
+            if not gameObject.image and not self._showHitboxes:
                 continue
 
-            imageSurface = gameObject.image.GetSurface()
-            position = gameObject.geometry.position - cameraPosition + gameObject.image.offset - pg.Vector2(imageSurface.size) / 2 + pg.Vector2(surface.size) / 2
+            self._renderObject(surface, cameraPosition, gameObject)
 
-            if self.DoesObjectFitInScreen(position, imageSurface.size, surface.size):
-                surface.blit(imageSurface, position)
+    def _renderObject(self, surface: pg.Surface, cameraPosition: pg.Vector2, gameObject: GameObject):
+        position = gameObject.geometry.position - cameraPosition + pg.Vector2(surface.size) / 2 + gameObject._imageToGeometryOffset
+
+        aabb = gameObject.geometry.GetAABB()
+        visibleSize = gameObject.image.GetSurface().size if gameObject.image else aabb.size 
+
+        if self.DoesObjectFitInScreen(aabb.min, pg.Vector2(visibleSize), surface.size):
+            if gameObject.image:
+                gameObject.image.RenderOn(surface, position)
+            if self._showHitboxes:
+                gameObject.geometry.DrawOnScreen(surface, self._hitboxColor, self._hitboxWidth, cameraPosition)
+
+        return position
 
     def AddObject(self, gameObject: GameObject):
         if gameObject.IsDestroyed():
@@ -2223,11 +2628,13 @@ class PhysicsLayer(ObjectsLayer):
 
         self.__physicsIterations = 4
 
+        self.__showVelocities = False
+
         self.__joints = []
 
-        self.__showHitboxes = False
-        self.__hitboxColor = "red"
-        self.__hitboxWidth = 1
+    def ShowHitboxes(self, color = "red", width=1, showVelocities=False):
+        super().ShowHitboxes(color, width)
+        self.__showVelocities = showVelocities
 
     def AddJoint(self, joint: Joint):
         if joint in self.__joints or joint._layer:
@@ -2253,15 +2660,8 @@ class PhysicsLayer(ObjectsLayer):
     def SetPhysicsIterations(self, value: int):
         self.__physicsIterations = pg.math.clamp(value, 1, 128)
 
-    def ShowHitboxes(self, color: str | pg.Color | tuple[int, int, int] = "red", width = 1):
-        self.__showHitboxes = True
-        self.__hitboxColor = color
-        self.__hitboxWidth = pg.math.clamp(width, 0, 100)
-
-    def HideHitboxes(self):
-        self.__showHitboxes = False
-
-    def Render(self, surface: pg.Surface, cameraPosition: pg.Vector2):
+    def Update(self, dt):
+        super().Update(dt)
         contactPairs = []
         dt = self.__game.time.GetDeltaTime() / self.__physicsIterations
         for _ in range(self.__physicsIterations):
@@ -2273,17 +2673,18 @@ class PhysicsLayer(ObjectsLayer):
             for joint in self.__joints:
                 joint.Update(dt)
 
+    def Render(self, surface: pg.Surface, cameraPosition: pg.Vector2):
         for gameObject in self.__gameObjects:
-            if not gameObject.image:
+            if not gameObject.image and not self._showHitboxes:
                 continue
 
-            imageSurface = gameObject.image.GetSurface()
-            position = gameObject.geometry.position - cameraPosition + gameObject.image.offset - pg.Vector2(imageSurface.size) / 2 + pg.Vector2(surface.size) / 2
-
-            if self.DoesObjectFitInScreen(position, imageSurface.size, surface.size):
-                surface.blit(imageSurface, position)
-                if self.__showHitboxes:
-                    gameObject.geometry.DrawOnScreen(surface, self.__hitboxColor, self.__hitboxWidth, cameraPosition)
+            position =  self._renderObject(surface, cameraPosition, gameObject)
+            if self.__showVelocities:
+                pg.draw.line(surface, 
+                             self._hitboxColor, 
+                             position, 
+                             position + gameObject.GetComponent(Rigidbody).linearVelocity, 
+                             self._hitboxWidth)
 
     def AddObject(self, gameObject: GameObject):
         if gameObject.IsDestroyed():
@@ -2353,7 +2754,7 @@ class Light:
             cos1 = round(math.cos(math.radians(angle)) * factor, 3)
             sin1 = round(math.sin(math.radians(angle)) * factor, 3)
 
-            easingFunction = smoothing.cubicBezier(cos1, sin1, cos1 + factor, sin1 + factor)
+            easingFunction = cubicBezier(cos1, sin1, cos1 + factor, sin1 + factor)
 
         brightness = round(255 * self.__brightness)
 
@@ -2450,17 +2851,17 @@ class Particle:
         if self.template.scaleVelocity is not None:
             self.scaleVelocity = (self.template.scaleVelocity - self.__size) / self.lifetime
 
-        self.colorVelocity = smoothing.Transition()
+        self.colorVelocity = KeyframeTransition()
         if self.template.colorVelocity is not None:
-            self.colorVelocity.AddValue(smoothing.Value(list(self.color), 1))
+            self.colorVelocity.AddValue(Keyframe(list(self.color), 1))
             if isinstance(self.template.colorVelocity[0], int):
-                self.colorVelocity.AddValue(smoothing.Value(list(self.template.colorVelocity), self.lifetime, smoothing.linear))
+                self.colorVelocity.AddValue(Keyframe(list(self.template.colorVelocity), self.lifetime, linear))
             else:
                 for color in self.template.colorVelocity:
                     value = color[0]
                     time = self.lifetime * color[1] / 100 if len(color) > 1 else self.lifetime
-                    func = color[2] if len(color) > 2 else smoothing.linear
-                    self.colorVelocity.AddValue(smoothing.Value(list(value), time, func))
+                    func = color[2] if len(color) > 2 else linear
+                    self.colorVelocity.AddValue(Keyframe(list(value), time, func))
 
             self.colorVelocity.ToNextValue()
 
@@ -2487,7 +2888,7 @@ class Particle:
             if not self.colorVelocity.IsInProcess():
                 self.colorVelocity.ToNextValue()
 
-            self.color = self.colorVelocity.GetValue().List
+            self.color = self.colorVelocity.GetKeyframeValue()
             if self.template.sizeVelocity is not None:
                 self._currentSurface = self.__originalSurface.copy()
                 self._currentSurface.fill(self.color, special_flags=pg.BLEND_RGBA_ADD)
@@ -2601,8 +3002,9 @@ class ParticleSystem(Layer):
         
         self.EmitCustomShape(templateName, lifetime, self.shapes[shapeName], count)
 
-    def Render(self, surface, cameraPosition, offset):
-        dt = self.__game.time.GetDeltaTime() if self.__game else 0.016
+    def Update(self, dt):
+        super().Update(dt)
+
         idx = 0
         while idx < len(self.__particles):
             particle = self.__particles[idx]
@@ -2614,12 +3016,14 @@ class ParticleSystem(Layer):
 
                 continue
 
-            position = particle.position - cameraPosition - offset + pg.Vector2(surface.size) / 2
+            idx += 1
+
+    def Render(self, surface, cameraPosition):
+        for particle in self.__particles:
+            position = particle.position - cameraPosition + pg.Vector2(surface.size) / 2
 
             if self.DoesObjectFitInScreen(position, particle._currentSurface.size, surface.size):
                 surface.blit(particle._currentSurface, position - pg.Vector2(particle._currentSurface.size) / 2)
-
-            idx += 1
 
 
 class TileType:
@@ -2642,7 +3046,7 @@ class TileType:
 
 class Tile(GameObject):
     def __init__(self, position: tuple, size: float, tileType: TileType):
-        super().__init__(Geometry.Box(position[0], position[1], size, size), tileType.imageName)
+        super().__init__(Geometry(position[0], position[1], (size, size)), tileType.imageName)
 
         self.__tileType = tileType
         self.properties = {}
@@ -2671,10 +3075,13 @@ class Tilemap(Layer):
     def tileSize(self):
         return self.__tileSize
 
-    def Render(self, surface: pg.Surface, cameraPosition: pg.Vector2):
+    def Update(self, dt: float):
+        super().Update(dt)
         for tile in self.tiles:
             tile.Update()
 
+    def Render(self, surface: pg.Surface, cameraPosition: pg.Vector2):
+        for tile in self.tiles:
             imageSurface = tile.image.GetSurface()
             position = tile.geometry.position - cameraPosition + tile.GetImageOffset() + pg.Vector2(surface.size) / 2
 
@@ -2720,19 +3127,24 @@ class Tilemap(Layer):
 
 class Scene:
     def __init__(self, name: str):
-        global display
+        global display, game
         self.name = name
         self.__layers: dict[int, Layer] = {}
         self.start = lambda: None
         self.loop = lambda: None
         self.end = lambda: None
 
-        if display is None:
+        if display is None or game is None:
             ErrorHandler.Throw("EngineInitialization", "Scene", None, None, "Infinova has to be initialized before creating a \"Scene\"")
 
+        self.__game = game
         self._screenSurface = pg.Surface(display.size, pg.SRCALPHA).convert_alpha()
         self.camera = Camera(self._screenSurface.size, self._screenSurface)
         self._fillColor = "white"
+
+        self.__iteration = 1
+
+        self.__drawQueue = []
 
     def AddLayer(self, layer: Layer):
         if layer._scene:
@@ -2759,19 +3171,56 @@ class Scene:
         
         ErrorHandler.ThrowMissingError("Scene", "RemoveLayer", "layer")
 
-    def SetFillColor(self, colorValue: str | tuple[int, int, int] | pg.Color):
-        self._fillColor = colorValue
+    def SetFillColor(self, color: str | tuple[int, int, int] | pg.Color):
+        self._fillColor = color
+
+    def DrawCircle(self, color: str | tuple[int, int, int] | pg.Color, center: pg.Vector2 | tuple[int, int], radius: float, width: int = 0):
+        self.__drawQueue.append(["circle", color, center, radius, width])
+
+    @overload
+    def DrawRect(self, color: str | tuple[int, int, int] | pg.Color, center: pg.Vector2 | tuple[int, int], size: pg.Vector2 | tuple[int, int], width: int = 0):
+        ...
+
+    @overload
+    def DrawRect(self, color: str | tuple[int, int, int] | pg.Color, rect: pg.Rect | tuple[int, int, int, int], width: int = 0):
+        ...
+
+    def DrawRect(self, *args):
+        if len(args) > 4:
+            ErrorHandler.Throw("ArgumentsError", "Scene", "DrawRect", None, "Too many arguments, expected 4")
+        
+        color = args[0]
+
+        if len(args) == 4:
+            self.__drawQueue.append(["rect", color, pg.Rect(pg.Vector2(args[1]) - pg.Vector2(args[2]) / 2, args[2]), args[3]])
+            return
+        if len(args) == 2:
+            self.__drawQueue.append(["rect", color, pg.Rect(args[1]), 0])
+            return
+        if isinstance(args[2], (int, float)):
+            self.__drawQueue.append(["rect", color, pg.Rect(args[1]), args[2]])
+            return
+        
+        self.__drawQueue.append(["rect", color, pg.Rect(pg.Vector2(args[1]) - pg.Vector2(args[2]) / 2, args[2]), 0])
 
     def _render(self):
         self._screenSurface.fill(self._fillColor)
+        if self.camera._lookAt:
+            self.camera.position += (pg.Vector2(self.camera._lookAt.geometry.position) - (self.camera.position)) / self.camera._lookAtSmoothness
+
         self.camera.updateRequired = True
         cameraSurface = self.camera.GetTransformedSurface()
         cameraSurface.fill(self._fillColor)
         layersWithoutZoomAndRotation = []
         layers = sorted(self.__layers.values(), key=lambda layer: layer.zIndex)
+        dt = self.__game.time.GetDeltaTime()
         for layer in layers:
             if not layer.active:
                 continue
+            
+            if self.__iteration >= self.__game.time._slowDown:
+                layer.Update(dt)
+                self.__iteration = 0
 
             if layer.renderWithZoomAndRotation:
                 layer.Render(cameraSurface, self.camera.position)
@@ -2779,10 +3228,22 @@ class Scene:
 
             layersWithoutZoomAndRotation.append(layer)
 
+        for drawing in self.__drawQueue:
+            match (drawing[0]):
+                case "circle":
+                    pg.draw.circle(cameraSurface, drawing[1], drawing[2] - self.camera.position + pg.Vector2(cameraSurface.size) / 2, drawing[3], drawing[4])
+                case "rect":
+                    rect = drawing[2].move(-self.camera.position + pg.Vector2(cameraSurface.size) / 2)
+                    pg.draw.rect(cameraSurface, drawing[1], rect, drawing[3])
+
+        self.__drawQueue.clear()
+
         self.camera.Update()
 
         for layer in layersWithoutZoomAndRotation:
             layer.Render(self._screenSurface, self.camera.position)
+
+        self.__iteration += 1
 
     def SetStartFunction(self, function):
         self.start = function
@@ -2817,31 +3278,15 @@ class SceneTransition:
         self.__surfaceSceneB = pg.Surface(self.__game._screen.size, pg.SRCALPHA).convert_alpha()
 
     @classmethod
-    def FromGIF(cls, filePath: str, framesDuration: int, updateSceneBOnFrame: int = -1, stopUpdateSceneAOnFrame: int = -1):
+    def FromGIF(cls, filePath: str, updateSceneBOnFrame: int = -1, stopUpdateSceneAOnFrame: int = -1):
         global game
         if not game:
             ErrorHandler.Throw("EngineInitialization", "SceneTransition", "FromGIF", None, "Infinova has to be initialized before using a \"SceneTransition\"")
 
-        if not pillowImported:
-            ErrorHandler.Throw("ImportError", "SceneTransition", "FromGIF", None, "You have to install \"Pillow\" before using \"SceneTransition.FromGIF\"")
-
-        img = pillowImage.open(filePath)
-
-        frames = []
-
-        try:
-            for i in range(img.n_frames):
-                img.seek(i)
-                frame = img.convert("RGBA")
-                
-                data = frame.tobytes()
-                size = frame.size
-                
-                frames.append(Frame(Image(f"Frame {i}", game._screen.width, game._screen.height, pg.image.frombytes(data, size, "RGBA")), framesDuration))
-        except EOFError:
-            pass
-
-        return cls(frames, updateSceneBOnFrame, stopUpdateSceneAOnFrame)
+        return cls([
+            Frame(Image(f"Frame {idx}", game._screen.width, game._screen.height, gifFrame[0], gifFrame[1]))
+            for idx, gifFrame in enumerate(pg.image.load_animation(filePath))
+        ], updateSceneBOnFrame, stopUpdateSceneAOnFrame)
         
 
     def Between(self, sceneA, sceneB, nextSceneIndex):
@@ -2953,6 +3398,7 @@ class Time:
 
     def __init__(self):
         self.__dt = 0.016
+        self._slowDown = 1
         self.__FPS = 60
         self.__currentFPS = 60
         self.__clock = pg.time.Clock()
@@ -2961,6 +3407,9 @@ class Time:
     def SetFPS(self, value: int):
         self.__FPS = value
         self.__dt = 1000 / value
+
+    def SlowDown(self, value: int):
+        self._slowDown = pg.math.clamp(value, 0, 100)
     
     def GetCurrentFPS(self):
         return self.__currentFPS
@@ -3005,6 +3454,7 @@ class Input:
         self.__mouse = []
         self.__mouseDown = []
         self.__mouseUp = []
+        self.__mousePos = (0, 0)
 
         self.__mouseWheel = 0
 
@@ -3014,6 +3464,8 @@ class Input:
         }
 
     def Update(self, wheel: int, keysDown, keysUp):
+        self.__mousePos = pg.mouse.get_pos()
+
         self.__keysDown = keysDown
         self.__keysUp = keysUp
 
@@ -3027,7 +3479,8 @@ class Input:
 
     def GetAxis(self, axis: str):
         if axis == "Mouse":
-            return pg.Vector2(pg.mouse.get_rel()) / self.__game.GetCurrentCamera().zoom
+            camera = self.__game.GetCurrentCamera()
+            return (pg.Vector2(pg.mouse.get_rel()) / camera.zoom).rotate(camera.rotation)
         
         if axis in self.Axes.keys():
             first = 0
@@ -3058,14 +3511,12 @@ class Input:
     def GetMouseButtonUp(self, button: int): return int(self.__mouseUp[button - 1])
     def GetMouseWheel(self): return self.__mouseWheel
 
-    def GetLocalMousePos(self, globalMousePos: pg.Vector2 = None): # Use in UI and things, that don't transform by camera
-        camera = self.__game.GetCurrentCamera()
-        return (pg.Vector2(pg.mouse.get_pos()) if not globalMousePos else
-                (globalMousePos - camera._getOffset()) / camera.zoom - camera.position)
+    def GetLocalMousePos(self): # Use in UI and things, that don't transform by camera
+        return pg.Vector2(self.__mousePos)
     
     def GetGlobalMousePos(self):
         camera = self.__game.GetCurrentCamera()
-        return pg.Vector2(pg.mouse.get_pos()) / camera.zoom + camera.position + camera._getOffset()
+        return camera.TransformPointToWorld(self.__mousePos)
     
     def IsMouseOnScreen(self):
         mousePos = pg.Vector2(pg.mouse.get_pos())

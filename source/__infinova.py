@@ -19,8 +19,24 @@ pg.init()
 def valuesNearlyEqual(a: float, b: float, distance: float = 0.001):
     return abs(a - b) < distance
 
-def vectorsNearlyEqual(a: pg.Vector2, b: pg.Vector2, distance: float = 0.005):
+def vectorsNearlyEqual(a: pg.typing.Point, b: pg.typing.Point, distance: float = 0.005):
     return a.distance_squared_to(b) < distance**2
+
+
+def createColoredImage(size: pg.typing.IntPoint, fillColor: pg.typing.ColorLike, specialFlags: int = 0):
+    surface = pg.Surface(size, specialFlags)
+    surface.fill(fillColor)
+    return surface
+
+
+def getLightIntensityFunction(intensity: float):
+    angle = intensity * 90
+    factor = 0.5 # radius of a circle on which points are lying
+    
+    cos1 = round(math.cos(math.radians(angle)) * factor, 3)
+    sin1 = round(math.sin(math.radians(angle)) * factor, 3)
+
+    return cubicBezier(cos1, sin1, cos1 + factor, sin1 + factor)
 
 
 def quit():
@@ -98,7 +114,7 @@ class Image:
         return self.__rotation
     
     @size.setter
-    def size(self, value: tuple[int, int]):
+    def size(self, value: pg.typing.Point):
         self.__size = tuple(pg.Vector2(value))
         self.UpdateSurface()
     
@@ -305,7 +321,7 @@ class Geometry:
             for vertex in self._vertices:
                 center += vertex
             center /= len(self._vertices)
-            
+
             self._vertices.sort(key=lambda vertex: math.atan2(vertex.y - center.y, vertex.x - center.x))
             for vertex in self._vertices:
                 vertex -= center
@@ -1677,7 +1693,7 @@ class Rigidbody(Component):
         self.force += pg.Vector2(value)
 
     def ApplyForceAtPoint(self, value: pg.Vector2 | tuple, point: pg.Vector2, torqueFactor: float = 1):
-        self.ApplyForceAtLocalPoint(pg.Vector2(value), point - self.position, torqueFactor)
+        self.ApplyForceAtLocalPoint(pg.Vector2(value), point - self.shape.position, torqueFactor)
 
     def ApplyForceAtLocalPoint(self, value: pg.Vector2 | tuple, point: pg.Vector2, torqueFactor: float = 1):
         if point is not None and value is not None:
@@ -1685,7 +1701,7 @@ class Rigidbody(Component):
             self.torque += point.cross(value) * torqueFactor
 
     def ApplyForceAtAnchor(self, value: pg.Vector2, anchorIndex: int, torqueFactor: float = 1):
-        self.ApplyForceAtPoint(value, self.GetAnchor(anchorIndex), torqueFactor)
+        self.ApplyForceAtPoint(value, self.shape.GetAnchor(anchorIndex), torqueFactor)
 
     def ApplyAngularForce(self, value: float):
         self.angularVelocity += value
@@ -2230,7 +2246,7 @@ class SpringJoint(Joint):
 	
 
 class HingeJoint(Joint):
-    def __init__(self, bodyA: GameObject, bodyB: GameObject, anchorAIndex: int, anchorBIndex: int, length: float = -1, strength: float = 5):
+    def __init__(self, bodyA: GameObject, bodyB: GameObject, anchorAIndex: int, anchorBIndex: int, length: float = -1, strength: float = 1):
         super().__init__(bodyA, bodyB, anchorAIndex, anchorBIndex)
 
         self.objectA.geometry.cannotCollideWith.append(self.objectB.geometry)
@@ -2258,29 +2274,29 @@ class HingeJoint(Joint):
 
         normal = direction.normalize()
 
-        contact = CollisionManifold(self.bodyB, self.bodyA, normal, self.initialLength - distance, (None, None, 0))
-        CollisionsResolver.SeparateBodies(self.bodyA, self.bodyB, contact.normal * contact.depth * 0.5)
+        contact = CollisionManifold(self.objectB, self.objectA, normal, self.initialLength - distance, (None, None, 0))
+        CollisionsResolver.SeparateBodies(self.objectA, self.objectB, contact.normal * contact.depth * 0.5)
 
         if not self.bodyA.IsStatic():
-            self.bodyA.ApplyForceAtAnchor(-contact.normal * contact.depth * self.strength, self.anchorAIndex)
+            self.bodyA.ApplyForceAtAnchor(-normal * (self.initialLength - distance) * self.strength, self.anchorAIndex)
             
         if not self.bodyB.IsStatic():
-            self.bodyB.ApplyForceAtAnchor(contact.normal * contact.depth * self.strength, self.anchorBIndex)
+            self.bodyB.ApplyForceAtAnchor(normal * (self.initialLength - distance) * self.strength, self.anchorBIndex)
 
 
-class FixedJointWIP(HingeJoint):
-    def __init__(self, bodyA: Rigidbody, bodyB: Rigidbody, anchorAIndex: int, anchorBIndex: int, strength: float = 5, angularStrength: float = 5):
-        super().__init__(bodyA, bodyB, anchorAIndex, anchorBIndex, 0, strength)
+# class FixedJointWIP(HingeJoint):
+#     def __init__(self, bodyA: Rigidbody, bodyB: Rigidbody, anchorAIndex: int, anchorBIndex: int, strength: float = 5, angularStrength: float = 5):
+#         super().__init__(bodyA, bodyB, anchorAIndex, anchorBIndex, 0, strength)
 
-        self.angularStrength = angularStrength
+#         self.angularStrength = angularStrength
 
-    def Update(self, dt: float):
-        super().Update(dt)
+#     def Update(self, dt: float):
+#         super().Update(dt)
 
-        if not self.bodyB.IsStatic():
-            self.bodyB.angularVelocity += (self.relativeAngle - (self.bodyB.angle - self.bodyA.angle)) * self.angularStrength
-        if not self.bodyA.IsStatic():
-            self.bodyA.angularVelocity += (self.relativeAngle - (self.bodyA.angle - self.bodyB.angle)) * self.angularStrength
+#         if not self.bodyB.IsStatic():
+#             self.bodyB.ApplyAngularForce((self.relativeAngle - (self.objectB.geometry.angle - self.objectA.geometry.angle)) * self.angularStrength)
+#         if not self.bodyA.IsStatic():
+#             self.bodyA.ApplyAngularForce((self.relativeAngle - (self.objectA.geometry.angle - self.objectB.geometry.angle)) * self.angularStrength)
 
 class ImageGroup:
     def __init__(self, name: str):
@@ -2592,7 +2608,7 @@ class ObjectsLayer(Layer):
         aabb = gameObject.geometry.GetAABB()
         visibleSize = gameObject.image.GetSurface().size if gameObject.image else aabb.size 
 
-        if self.DoesObjectFitInScreen(aabb.min, pg.Vector2(visibleSize), surface.size):
+        if self.DoesObjectFitInScreen(aabb.min - cameraPosition, pg.Vector2(visibleSize), surface.size):
             if gameObject.image:
                 gameObject.image.RenderOn(surface, position)
             if self._showHitboxes:
@@ -2625,17 +2641,32 @@ class PhysicsLayer(ObjectsLayer):
         self.__game = game
         self.__gameObjects: list[GameObject] = []
 
-        self._gravity = pg.Vector2(0, 200)
+        self._gravity = pg.Vector2(0, 100)
 
         self.__physicsIterations = 4
 
         self.__showVelocities = False
+        self.__showJoints = False
+        self.__jointsColor = None
+        self.__jointsWidth = None
 
-        self.__joints = []
+        self.__joints: list[Joint] = []
 
     def ShowHitboxes(self, color = "red", width=1, showVelocities=False):
         super().ShowHitboxes(color, width)
         self.__showVelocities = showVelocities
+
+    def HideHitboxes(self):
+        super().HideHitboxes()
+        self.__showVelocities = False
+
+    def ShowJoints(self, color: str | pg.Color | tuple[int, int, int] = "red", width = 1):
+        self.__showJoints = True
+        self.__jointsColor = color
+        self.__jointsWidth = pg.math.clamp(width, 0, 100)
+
+    def HideJoints(self):
+        self.__showJoints = False
 
     def AddJoint(self, joint: Joint):
         if joint in self.__joints or joint._layer:
@@ -2679,24 +2710,34 @@ class PhysicsLayer(ObjectsLayer):
             if not gameObject.image and not self._showHitboxes:
                 continue
 
-            position =  self._renderObject(surface, cameraPosition, gameObject)
+            position = self._renderObject(surface, cameraPosition, gameObject)
             if self.__showVelocities:
                 pg.draw.line(surface, 
                              self._hitboxColor, 
                              position, 
                              position + gameObject.GetComponent(Rigidbody).linearVelocity, 
                              self._hitboxWidth)
+                
+        if self.__showJoints:
+            for joint in self.__joints:
+                pg.draw.line(surface,
+                                self.__jointsColor,
+                                joint.objectA.geometry.GetAnchor(joint.anchorAIndex) - cameraPosition + pg.Vector2(surface.size) / 2,
+                                joint.objectB.geometry.GetAnchor(joint.anchorBIndex) - cameraPosition + pg.Vector2(surface.size) / 2,
+                                self.__jointsWidth)
 
     def AddObject(self, gameObject: GameObject):
         if gameObject.IsDestroyed():
             ErrorHandler.Throw("ObjectDestroyedError", "ObjectsLayer", "AddObject", "gameObject", "You cannot use a destroyed \"GameObject\" instance")
+        if not gameObject.HasComponent(Rigidbody):
+            ErrorHandler.Throw("MissingError", "PhysicsLayer", "AddObject", None, "You cannot add a \"GameObject\" to PhysicsLayer if it hasn't got a \"Rigidbody\" component")
+
         self.__gameObjects.append(gameObject)
         gameObject._layer = self
 
 
 class Light:
     def __init__(self, position: pg.Vector2 | tuple, radius: float, brightness: float, intensity: float, color: str | pg.Color | tuple[int, int, int] = "white"):
-
         self.position = pg.Vector2(position)
 
         self._radius = radius
@@ -2749,13 +2790,7 @@ class Light:
         if self.__intensity == -1:
             easingFunction = lambda x: x  # noqa: E731
         else:
-            angle = self.__intensity * 90
-            factor = 0.5 # radius of a circle on which points are lying
-            
-            cos1 = round(math.cos(math.radians(angle)) * factor, 3)
-            sin1 = round(math.sin(math.radians(angle)) * factor, 3)
-
-            easingFunction = cubicBezier(cos1, sin1, cos1 + factor, sin1 + factor)
+            easingFunction = getLightIntensityFunction(self.__intensity)
 
         brightness = round(255 * self.__brightness)
 
@@ -2803,7 +2838,8 @@ class ParticleTemplate:
     def __init__(self, scale: float, # factor (for example, if size = 2, surface.size will be 2x)
                        surface: pg.Surface, colors: list[tuple[int, int, int]], 
                        scaleVelocity: int = None, colorVelocity: tuple[int, int, int] | list[list[tuple[int, int, int], float]] = None, # list[list[color, % of lifetime, interpolation function (linear by default)]
-                       startVelocity: pg.Vector2 | tuple[float, str] = pg.Vector2(), constantVelocity: pg.Vector2 | tuple[float, str] = pg.Vector2()): # vector or [factor, "fromCenter" - "toCenter" or "fromPosition" - "toPosition"] #(strength, shape center)
+                       startVelocity: pg.Vector2 = pg.Vector2(), constantVelocity: pg.Vector2 = pg.Vector2(), 
+                       alwaysMoveTo = None, alwaysMovingSpeed = 1):
 
         self.scale = scale
         self.surface = surface
@@ -2813,6 +2849,8 @@ class ParticleTemplate:
         self.colorVelocity = colorVelocity
         self.startVelocity = startVelocity
         self.constantVelocity = constantVelocity
+        self.alwaysMoveTo = alwaysMoveTo if alwaysMoveTo else lambda: pg.Vector2()
+        self.alwaysMovingStrength = alwaysMovingSpeed
 
 class Particle:
     def __init__(self, lifetime: float, position: pg.Vector2, template: ParticleTemplate, shape):
@@ -2824,47 +2862,42 @@ class Particle:
         self.position = position.copy()
 
         self.color = template.colors[randint(0, len(template.colors) - 1)]
-        self.__originalSurface = template.surface
+        self.__originalSurface = template.surface.convert_alpha()
         self._currentSurface = template.surface.copy()
-        self._currentSurface.fill(self.color, special_flags=pg.BLEND_RGBA_ADD)
+        self._currentSurface.fill(self.color, special_flags=pg.BLEND_RGBA_MULT)
 
-        vector = self.template.startVelocity.copy()
-        if isinstance(self.template.startVelocity, list):
-            vector = self.position - (shape.center if self.template.startVelocity[1].endswith("Center") else shape.position)
-            if vector.length() > 0:
-                vector = vector.normalize() * self.template.startVelocity[0]
-            if self.template.startVelocity[1].startswith("from"):
-                vector *= -1
+        self.linearVelocity = pg.Vector2(self.template.startVelocity)
 
-        self.linearVelocity = vector
+        # vector = self.template.constantVelocity
+        # if isinstance(self.template.constantVelocity, (list, tuple)):
+        #     vector = self.position - (shape.center if self.template.constantVelocity[1].endswith("Center") else shape.position)
+        #     if vector.length() > 0:
+        #         vector = vector.normalize() * self.template.constantVelocity[0]
+        #     if self.template.constantVelocity[1].startswith("from"):
+        #         vector *= -1
 
-        vector = self.template.constantVelocity
-        if isinstance(self.template.constantVelocity, list):
-            vector = self.position - (shape.center if self.template.constantVelocity[1].endswith("Center") else shape.position)
-            if vector.length() > 0:
-                vector = vector.normalize() * self.template.constantVelocity[0]
-            if self.template.constantVelocity[1].startswith("from"):
-                vector *= -1
+        self.constantVelocity = pg.Vector2(self.template.constantVelocity)
 
-        self.constantVelocity = vector
+        self.alwaysMoveTo = self.template.alwaysMoveTo
+        self.alwaysMovingStrength = self.template.alwaysMovingStrength
 
         self.scaleVelocity = 0
         if self.template.scaleVelocity is not None:
-            self.scaleVelocity = (self.template.scaleVelocity - self.__size) / self.lifetime
+            self.scaleVelocity = (self.template.scaleVelocity - self.__scale) / self.lifetime
 
         self.colorVelocity = KeyframeTransition()
         if self.template.colorVelocity is not None:
-            self.colorVelocity.AddValue(Keyframe(list(self.color), 1))
+            self.colorVelocity.AddKeyframe(Keyframe(list(self.color), 1))
             if isinstance(self.template.colorVelocity[0], int):
-                self.colorVelocity.AddValue(Keyframe(list(self.template.colorVelocity), self.lifetime, linear))
+                self.colorVelocity.AddKeyframe(Keyframe(list(self.template.colorVelocity), self.lifetime, linear))
             else:
                 for color in self.template.colorVelocity:
                     value = color[0]
                     time = self.lifetime * color[1] / 100 if len(color) > 1 else self.lifetime
                     func = color[2] if len(color) > 2 else linear
-                    self.colorVelocity.AddValue(Keyframe(list(value), time, func))
+                    self.colorVelocity.AddKeyframe(Keyframe(list(value), time, func))
 
-            self.colorVelocity.ToNextValue()
+            self.colorVelocity.ToNextKeyframe()
 
     @property
     def lifetime(self):
@@ -2873,8 +2906,12 @@ class Particle:
     def Update(self, dt: float):
         self.__lifetime = round(self.__lifetime - dt, 3)
 
+        alwaysMovingVector: pg.Vector2 = self.alwaysMoveTo() - self.position
+        if not vectorsNearlyEqual(alwaysMovingVector, (0, 0)):
+            alwaysMovingVector = alwaysMovingVector.normalize() * self.alwaysMovingStrength
+
         self.linearVelocity += self.constantVelocity * dt
-        self.position += self.linearVelocity * dt
+        self.position += self.linearVelocity * dt + alwaysMovingVector * dt
 
         self.colorVelocity.Update(dt)
 
@@ -2882,17 +2919,17 @@ class Particle:
             self.scaleVelocity = (self.template.scaleVelocity - self.__scale) * dt / self.__lifetime
             self.__scale = round(pg.math.clamp(self.__scale + self.scaleVelocity, 0.001, 100), 3)
 
-            self._currentSurface = pg.transform.smoothscale_by(self.__originalSurface, self.__scale)
-            self._currentSurface.fill(self.color, special_flags=pg.BLEND_RGBA_ADD)
+            self._currentSurface = pg.transform.scale_by(self.__originalSurface, self.__scale).convert_alpha()
+            self._currentSurface.fill(self.color, special_flags=pg.BLEND_RGBA_MULT)
 
         if self.template.colorVelocity is not None:
             if not self.colorVelocity.IsInProcess():
-                self.colorVelocity.ToNextValue()
+                self.colorVelocity.ToNextKeyframe()
 
             self.color = self.colorVelocity.GetKeyframeValue()
-            if self.template.sizeVelocity is not None:
-                self._currentSurface = self.__originalSurface.copy()
-                self._currentSurface.fill(self.color, special_flags=pg.BLEND_RGBA_ADD)
+            if self.template.scaleVelocity is None:
+                self._currentSurface = self.__originalSurface.convert_alpha()
+                self._currentSurface.fill(self.color, special_flags=pg.BLEND_RGBA_MULT)
 
 class EmitterShape:
     def __init__(self, position: pg.Vector2 | tuple[int, int]):
@@ -2915,17 +2952,9 @@ class EmitterRect(EmitterShape):                                                
         self.size = pg.Vector2(size)
         self.fraction = fraction
 
-    @property
-    def center(self):
-        return self.position + self.size / 2
-    
-    @center.setter
-    def center(self, value: pg.Vector2):
-        self.position = pg.Vector2(value - self.size / 2)
-
     def GetRandomPointInArea(self):
         return pg.Vector2(self.position.x + randint(0, int(self.size.x * self.fraction)) / self.fraction,
-                          self.position.y + randint(0, int(self.size.y * self.fraction)) / self.fraction)
+                          self.position.y + randint(0, int(self.size.y * self.fraction)) / self.fraction) - self.size / 2
     
 class EmitterCircle(EmitterShape):
     def __init__(self, position: pg.Vector2 | tuple[int, int], radius: float, fraction: int = 1):
@@ -2970,6 +2999,16 @@ class EmitterLine(EmitterShape):
         return (self.position + self.__directionNormalized * randint(0, int(self.__length * self.fraction)) / self.fraction +
                 self.__directionTurnedRight * randint(int(-self.width / 2 * self.fraction), int(self.width / 2 * self.fraction)) / self.fraction)
 
+class EmitterLight(EmitterShape):
+    def __init__(self, position: pg.Vector2 | tuple[int, int], radius: float, lightIntensity: float = 0.5, fraction: int = 100000):
+        super().__init__(position)
+        self.radius = radius
+        self.fraction = fraction
+        self.function = getLightIntensityFunction(lightIntensity)
+
+    def GetRandomPointInArea(self):
+        return self.center + pg.Vector2(1, 0).rotate(randint(0, 359)) * self.function(randint(0, self.fraction) / self.fraction) * self.radius# * randint(0, int(self.radius * self.fraction)) / self.fraction
+
 class ParticleSystem(Layer):
     def __init__(self, name, shapes: dict[str, EmitterShape]): # shapes = {name: shape}
         super().__init__(name)
@@ -2998,7 +3037,6 @@ class ParticleSystem(Layer):
 
     def Emit(self, templateName: str, shapeName: int, lifetime: float, count: int = 1):
         if len(self.shapes) <= 0 or shapeName not in self.shapes.keys():
-            print(len(self.shapes) <= 0, shapeName, self.shapes.keys())
             return None
         
         self.EmitCustomShape(templateName, lifetime, self.shapes[shapeName], count)
@@ -3023,7 +3061,7 @@ class ParticleSystem(Layer):
         for particle in self.__particles:
             position = particle.position - cameraPosition + pg.Vector2(surface.size) / 2
 
-            if self.DoesObjectFitInScreen(position, particle._currentSurface.size, surface.size):
+            if self.DoesObjectFitInScreen(position - pg.Vector2(surface.size) / 2, particle._currentSurface.size, surface.size):
                 surface.blit(particle._currentSurface, position - pg.Vector2(particle._currentSurface.size) / 2)
 
 

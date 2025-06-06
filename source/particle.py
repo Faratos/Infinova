@@ -1,1 +1,1 @@
-from .__infinova import ParticleTemplate, Particle, EmitterShape, EmitterRect, EmitterLine, EmitterCircle
+from .__infinova import ParticleTemplate, Particle, EmitterShape, EmitterRect, EmitterLine, EmitterCircle, EmitterLight

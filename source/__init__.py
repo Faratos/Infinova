@@ -1,8 +1,9 @@
 import pygame as _sdl
 
-from . import assets, animation, entity, geometry, layer, locals, physics, scene, system
+from . import assets, animation, entity, geometry, layer, locals, physics, scene, system, utils
 
 from .assets import Image
+from .geometry import Geometry
 from .entity import GameObject
 from .scene import Scene
 
